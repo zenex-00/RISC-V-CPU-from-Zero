@@ -1,0 +1,106 @@
+import { register, type Example } from './types';
+import { hex } from '../sim/bits';
+
+const lui: Example = { asm: 'lui x5, 0x12345', pc: 0x10 };
+const auipc: Example = { asm: 'auipc x5, 0x1', pc: 0x10 };
+const addi: Example = { asm: 'addi x5, x5, 0x678', pc: 0x14, regs: { 5: 0x12345000 } };
+const neg: Example = { asm: 'addi x5, x5, -1', pc: 0x14, regs: { 5: 0x12346000 } };
+
+const front = ['stage:pc', 'stage:fetch', 'stage:decode', 'stage:read'];
+const cycle = [...front, 'stage:alu', 'stage:mem', 'stage:wb', 'stage:next'];
+
+export default register({
+  id: 9,
+  title: 'lui and auipc',
+  short: 'lui, auipc',
+  goal: 'U-type immediates and the ALU input-A choice.',
+  level: 9,
+  scope: ['add', 'sub', 'and', 'or', 'xor', 'slt', 'sltu', 'sll', 'srl', 'sra', 'addi', 'andi', 'ori', 'xori', 'slti', 'sltiu', 'slli', 'srli', 'srai', 'lw', 'lb', 'lh', 'lbu', 'lhu', 'sw', 'sb', 'sh', 'beq', 'bne', 'blt', 'bge', 'bltu', 'bgeu', 'jal', 'jalr', 'lui', 'auipc'],
+  steps: [
+    {
+      title: 'Problem: 32-bit constants',
+      text: 'addi can only add a 12-bit constant. To build 0x12345678 we need to set the upper 20 bits first. `lui x5, 0x12345` (load upper immediate) writes 0x12345000 into x5.',
+      example: lui,
+      flow: ['stage:pc', 'stage:fetch'],
+    },
+    {
+      title: 'The U-type format',
+      text: 'U-type has {rd} and a 20-bit {imm} in bits 31:12. The immediate generator places it in ImmExt[31:12] and fills bits 11:0 with zeros; no sign extension is needed because bit 31 is already at the top.',
+      fields: ['imm', 'rd'],
+      imm: 'U',
+    },
+    {
+      title: 'Problem: the ALU always adds rs1',
+      text: 'We could pass ImmExt through the ALU as 0 + ImmExt. But input A is always RD1, and bits 19:15 of a lui are immediate bits, so RD1 holds some unrelated register.',
+      flow: ['stage:decode', 'stage:read'],
+      fields: ['imm'],
+    },
+    {
+      title: 'A mux on ALU input A',
+      text: 'A 3-input mux in front of input A, steered by <ctl>ALUSrcA</ctl>, chooses RD1 (00), the PC (01) or the constant 0 (10).',
+      reveal: ['srca'],
+      focus: ['srcamux'],
+      inside: 'srcamux',
+      predict: {
+        q: 'Which ALUSrcA does `lui x5, 0x12345` need?',
+        options: [
+          { label: '00: RD1', value: '0' },
+          { label: '01: PC', value: '1' },
+          { label: '10: constant 0', value: '2' },
+        ],
+        answer: (t) => String(t.ctrl.ALUSrcA),
+        explain: () => 'lui computes 0 + ImmExt, so A must be 0 (and ALUSrc = 1 so B = ImmExt). Another valid design sends ImmExt straight to the result mux instead.',
+        concept: 'alusrca-lui',
+      },
+      flow: ['stage:alu'],
+    },
+    {
+      text: 'The result 0x12345000 is written back through ResultSrc = 00 like any ALU result.',
+      flow: ['stage:wb', 'stage:next'],
+    },
+    {
+      title: 'auipc: add upper immediate to PC',
+      text: '`auipc x5, 0x1` computes PC + 0x1000. It is the basis for PC-relative addressing: code that works wherever it is loaded in memory.',
+      example: auipc,
+      flow: front,
+      predict: {
+        q: 'auipc is at PC = 0x10. What does it write to x5?',
+        options: [
+          { label: '0x00001000', value: '0x00001000' },
+          { label: '0x00001010', value: '0x00001010' },
+          { label: '0x00001014', value: '0x00001014' },
+          { label: '0x00000011', value: '0x00000011' },
+        ],
+        answer: (t) => hex(t.Result),
+        explain: () => 'ALUSrcA = 01 puts the PC on input A: 0x10 + 0x1000 = 0x1010. It uses the address of the auipc itself, not PC + 4.',
+        concept: 'auipc',
+      },
+    },
+    {
+      text: 'The PC reaches the ALU through the new wire from the PC register. Note the crossings: they are not connections (no dot).',
+      flow: ['stage:alu', 'stage:wb', 'stage:next'],
+      focus: ['w_pc_top'],
+    },
+    {
+      title: 'Building 0x12345678',
+      text: 'After lui, `addi x5, x5, 0x678` adds the low 12 bits: 0x12345000 + 0x678 = 0x12345678. The assembler pseudo-instruction `li` emits exactly this pair.',
+      example: addi,
+      flow: cycle,
+    },
+    {
+      title: 'The rounding trap',
+      text: 'addi sign-extends. To build 0x12345FFF, the low part 0xFFF means −1, so lui must load 0x12346 (one more) and addi adds −1. This is why `li` adds 0x800 before taking the upper bits.',
+      example: neg,
+      flow: cycle,
+      panel: 'li-split',
+    },
+  ],
+  practice: [
+    { kind: 'encode', ops: ['lui', 'auipc'], title: 'Encode U-type' },
+    { kind: 'decode', ops: ['lui', 'auipc', 'jal', 'addi'], title: 'Decode U-type' },
+    { kind: 'control', ops: ['lui', 'auipc', 'jalr', 'add'], title: 'Set the control signals' },
+    { kind: 'trace', ops: ['auipc', 'lui'], title: 'Trace lui and auipc' },
+    { kind: 'build', title: 'Build: the SrcA mux' },
+    { kind: 'quiz', title: 'U-type check', concepts: ['alusrca-lui', 'auipc', 'li-rounding'] },
+  ],
+});

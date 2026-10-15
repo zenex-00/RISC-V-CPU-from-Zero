@@ -1,0 +1,53 @@
+import { register } from './types';
+
+export default register({
+  id: 0,
+  title: 'Warm-up and vocabulary',
+  short: 'Warm-up',
+  goal: 'Combinational versus sequential logic, the clock edge, and what "single cycle" means.',
+  level: null,
+  scope: [],
+  steps: [
+    {
+      title: 'What we will build',
+      text: 'Over the next lessons you will build a processor that runs the RV32I base instruction set: 37 instructions covering arithmetic, logic, loads, stores, branches and jumps. ecall, ebreak, fence and the CSR instructions are out of scope.\n\nThe circuit starts almost empty and grows one block at a time. Each block appears only when an instruction needs it.',
+      panel: 'dp-vs-ctrl',
+    },
+    {
+      title: 'Combinational logic',
+      text: 'A combinational circuit has no memory: its outputs are a function of its present inputs only. Adders, multiplexers, decoders and the ALU are combinational. When an input changes, the output changes after a propagation delay.',
+      panel: 'comb-seq',
+    },
+    {
+      title: 'Sequential logic',
+      text: 'A sequential circuit stores state. A register is a group of edge-triggered D flip-flops: it copies its D input to its output Q only at the rising clock edge and holds Q steady in between. In this processor the PC, the register file and the data memory hold all the state.',
+      panel: 'comb-seq',
+    },
+    {
+      title: 'The clock edge',
+      text: 'All state elements share one clock. Between edges, combinational logic computes new values from the stored state; at the edge, every state element captures its input at the same instant. This discipline makes the design predictable.',
+      panel: 'clock',
+    },
+    {
+      title: 'Setup and hold, at a high level',
+      text: 'A flip-flop only captures D reliably if D is stable for a short setup time before the edge and a hold time after it. So the clock period must be long enough for the slowest combinational path to settle, plus the setup time.',
+      panel: 'setup-hold',
+    },
+    {
+      title: 'Datapath and control path',
+      text: 'The datapath is the plumbing that moves and transforms 32-bit values. The control path looks at the instruction and produces small control signals that steer the datapath: mux selects, the ALU operation, write enables.',
+      panel: 'dp-vs-ctrl',
+    },
+    {
+      title: 'What "single cycle" means',
+      text: 'In a single-cycle processor each instruction runs completely within one clock cycle: fetch, decode, read registers, compute, access memory, write back, and choose the next PC. The steps in this course show the order in which signals become valid inside that one cycle; registers and memory change only at the closing clock edge.',
+      panel: 'single-cycle',
+    },
+    {
+      title: 'Notation used throughout',
+      text: 'Registers are x0 to x31; `R[rs1]` means the value in register rs1 and `M[a]` means memory at byte address a. Bit ranges are written [hi:lo] (bits 19:15 are five bits) and `0x` marks hexadecimal. Instruction fields always use the same colours, {opcode} {rd} {funct3} {rs1} {rs2} {funct7} {imm}, and control signals look like <ctl>RegWrite</ctl>.',
+      panel: 'single-cycle',
+    },
+  ],
+  practice: [{ kind: 'quiz', title: 'Vocabulary check', concepts: ['comb-vs-seq', 'clock-edge', 'setup-hold', 'single-cycle'] }],
+});

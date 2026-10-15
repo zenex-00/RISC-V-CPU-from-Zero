@@ -1,0 +1,22 @@
+{
+  "name": "riscv-cpu-from-zero",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Interactive course: Build a RISC-V CPU from Zero (RV32I single-cycle).",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs --tests-only && node build-tmp/tests-node.js",
+    "typecheck": "tsc --noEmit",
+    "check:layout": "esbuild src/diagram/check-cli.ts --bundle --platform=node --outfile=build-tmp/check.js --log-level=warning && node build-tmp/check.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "preact": "10.29.8"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

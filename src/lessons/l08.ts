@@ -1,0 +1,132 @@
+import { register, type Example } from './types';
+import { hex } from '../sim/bits';
+
+const jal: Example = { asm: 'jal x1, +64', pc: 0x10 };
+const ret: Example = { asm: 'jalr x0, 0(x1)', pc: 0x58, regs: { 1: 0x14 } };
+const odd: Example = { asm: 'jalr x1, 1(x5)', pc: 0x10, regs: { 5: 0x100 } };
+const call: Example = { asm: 'jalr x1, 8(x6)', pc: 0x20, regs: { 6: 0x80 } };
+
+const front = ['stage:pc', 'stage:fetch', 'stage:decode', 'stage:read', 'stage:alu'];
+const cycle = [...front, 'stage:mem', 'stage:wb', 'stage:next'];
+
+export default register({
+  id: 8,
+  title: 'Jumps: jal and jalr',
+  short: 'Jumps',
+  goal: 'Linking PC + 4, the Jump signal, the J-type immediate and the jalr target.',
+  level: 8,
+  scope: ['add', 'sub', 'and', 'or', 'xor', 'slt', 'sltu', 'sll', 'srl', 'sra', 'addi', 'andi', 'ori', 'xori', 'slti', 'sltiu', 'slli', 'srli', 'srai', 'lw', 'lb', 'lh', 'lbu', 'lhu', 'sw', 'sb', 'sh', 'beq', 'bne', 'blt', 'bge', 'bltu', 'bgeu', 'jal', 'jalr'],
+  steps: [
+    {
+      title: 'Problem: calling a function',
+      text: 'A function call must jump to the function and remember where to come back. `jal x1, +64` jumps 64 bytes ahead and saves the return address, PC + 4, in x1 (the return-address register ra).',
+      example: jal,
+      flow: ['stage:pc', 'stage:fetch'],
+    },
+    {
+      title: 'The J-type format',
+      text: 'jal has only {rd} and a 20-bit {imm}. The offset is even (bit 0 not stored), giving ±1 MiB. Its bits are arranged so that bits 19:12 match U-type and bits 30:21 match I-type, and bit 31 is the sign.',
+      fields: ['imm', 'rd'],
+      imm: 'J',
+    },
+    {
+      title: 'The target uses the branch adder',
+      text: 'The target is PC + offset, the same sum the branch adder already computes. <ctl>ImmSrc</ctl> = J makes the immediate generator use the J layout.',
+      flow: ['stage:decode', 'stage:read', 'w_pc_down', 'bradd', 'w_imm_bradd'],
+    },
+    {
+      title: 'Problem: jal is unconditional',
+      text: 'With PCSrc = Branch AND condition, the jump would depend on whatever the ALU happens to compute. We add an OR gate and a new control signal: PCSrc = <ctl>Jump</ctl> OR (Branch AND condition).',
+      reveal: ['jump'],
+      flow: ['stage:next'],
+      focus: ['org'],
+      inside: 'org',
+    },
+    {
+      title: 'Linking: a third write-back source',
+      text: 'x1 must receive PC + 4. That value already exists at the output of the PC + 4 adder, so it becomes input 2 of the result mux.',
+      predict: {
+        q: 'Which ResultSrc does jal need?',
+        options: [
+          { label: '00: ALUResult', value: '0' },
+          { label: '01: memory data', value: '1' },
+          { label: '10: PC + 4', value: '2' },
+        ],
+        answer: (t) => String(t.ctrl.ResultSrc),
+        explain: () => 'jal writes the return address PC + 4 = 0x14 into rd. The ALU is not needed at all for jal: its inputs and output are don\'t-cares.',
+        concept: 'jal-link',
+      },
+      flow: ['stage:wb'],
+      fields: ['rd'],
+    },
+    {
+      edge: true,
+      text: 'At the edge two things happen at once: x1 = 0x14 and PC = 0x50. The function starts executing with its return address safely in x1.',
+      flow: ['c_pc_clk', 'c_rf_clk'],
+    },
+    {
+      title: 'Problem: returning',
+      text: 'The function ends with `jalr x0, 0(x1)` (the pseudo-instruction `ret`). The target is in a register, so it is not PC-relative: the branch adder computes the wrong thing.',
+      example: ret,
+      flow: front,
+    },
+    {
+      title: 'The ALU computes rs1 + imm',
+      text: 'jalr is I-type. The ALU adds R[rs1] + ImmExt, exactly like addi. A target mux before the PC mux chooses between PC + imm and this ALU result; its select is <ctl>PCTargetSrc</ctl>.',
+      reveal: ['jalr'],
+      focus: ['tgtmux'],
+      inside: 'tgtmux',
+      predict: {
+        q: 'x1 = 0x14. Where does `jalr x0, 0(x1)` jump?',
+        options: [
+          { label: '0x00000014', value: '0x00000014' },
+          { label: '0x0000005C', value: '0x0000005c' },
+          { label: '0x0000006C', value: '0x0000006c' },
+          { label: '0x00000058', value: '0x00000058' },
+        ],
+        answer: (t) => hex(t.PCNext),
+        explain: () => 'rs1 + 0 = 0x14, the instruction after the original jal. rd = x0, so the link value is discarded: ret does not need a new return address.',
+        concept: 'jalr-target',
+      },
+      flow: ['stage:next'],
+    },
+    {
+      edge: true,
+      text: 'At the edge the PC becomes 0x14 and execution continues after the call. The write to x0 is ignored.',
+      flow: ['c_pc_clk', 'c_rf_clk'],
+    },
+    {
+      title: 'Bit 0 is cleared',
+      text: 'The spec defines the jalr target as (R[rs1] + imm) with bit 0 set to 0. The small "&~1" block does this with no logic: bit 0 of the target is wired to 0.',
+      example: odd,
+      flow: cycle,
+      predict: {
+        q: 'x5 = 0x100. Where does `jalr x1, 1(x5)` jump?',
+        options: [
+          { label: '0x00000101', value: '0x00000101' },
+          { label: '0x00000100', value: '0x00000100' },
+          { label: '0x00000104', value: '0x00000104' },
+        ],
+        answer: (t) => hex(t.PCNext),
+        explain: () => '0x100 + 1 = 0x101, and clearing bit 0 gives 0x100. Clearing bit 0 lets software keep a flag in the low bit of a function pointer and simplifies the hardware.',
+        concept: 'jalr-bit0',
+      },
+    },
+    {
+      title: 'Calls through a register',
+      text: '`jalr x1, 8(x6)` calls a function whose address is computed at run time, as with a function pointer or a virtual method. It links PC + 4 in x1 like jal.',
+      example: call,
+      flow: cycle,
+      route: 'Without the C extension, instructions must be 4-byte aligned. A jalr target like 0x102 (bit 1 set) raises an instruction-address-misaligned exception in a real core; this simulator stops with a fetch error.',
+    },
+  ],
+  practice: [
+    { kind: 'encode', ops: ['jal', 'jalr'], title: 'Encode jumps' },
+    { kind: 'decode', ops: ['jal', 'jalr', 'beq', 'lw'], title: 'Decode jumps' },
+    { kind: 'control', ops: ['jal', 'jalr', 'beq', 'lw'], title: 'Set the control signals' },
+    { kind: 'trace', ops: ['jal', 'jalr'], title: 'Trace a jump' },
+    { kind: 'build', title: 'Build: jump hardware' },
+    { kind: 'break', title: 'Break the circuit', faults: ['stuck:Jump:0', 'stuck:PCTargetSrc:0', 'stuck:ResultSrc:0', 'cut:pctarget_to_pcmux'] },
+    { kind: 'quiz', title: 'Jump check', concepts: ['jal-link', 'jalr-target', 'jalr-bit0', 'jtype-imm'] },
+  ],
+});

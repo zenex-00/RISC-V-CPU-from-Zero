@@ -1,0 +1,32 @@
+Build a RISC-V CPU from Zero
+============================
+
+How to start
+------------
+Open index.html in Chrome, Edge, or Firefox (double-click it, or drag it
+into a browser window). Nothing needs to be installed and no internet
+connection is needed.
+
+The simulator's unit tests can be run from tests.html (or the "Tests"
+link in the top bar).
+
+Troubleshooting
+---------------
+- The page says "Loading the course..." and never changes:
+  JavaScript is turned off. Turn it on for local files, or try another
+  browser.
+- The page is blank or lessons do not load:
+  keep the folder structure intact. index.html needs the "assets" folder
+  next to it. Do not move index.html out of this folder on its own.
+  If the folder is inside a .zip file, extract it first.
+- Progress is not saved between visits:
+  the browser is blocking local storage for files opened from disk
+  (some privacy settings do this, and private windows forget it on
+  close). The course still works; progress just resets.
+  In Firefox, check that "Delete cookies and site data when Firefox is
+  closed" is off, or add an exception.
+- Text or the diagram looks very small:
+  zoom the page with Ctrl and + (Cmd and + on a Mac). Each diagram also
+  has a "100%" button that shows it full size inside a scrolling box.
+- Safari and very old browsers are not supported. Use a current Chrome,
+  Edge or Firefox.

@@ -1,0 +1,127 @@
+import { register, type Example } from './types';
+import { hex } from '../sim/bits';
+
+const taken: Example = { asm: 'beq x5, x6, +16', pc: 0x10, regs: { 5: 7, 6: 7 } };
+const notTaken: Example = { asm: 'beq x5, x6, +16', pc: 0x10, regs: { 5: 7, 6: 9 } };
+const back: Example = { asm: 'beq x0, x0, -8', pc: 0x20 };
+const add: Example = { asm: 'add x5, x6, x7', regs: { 6: 23, 7: 19 } };
+
+const front = ['stage:pc', 'stage:fetch', 'stage:decode', 'stage:read'];
+const cycle = [...front, 'stage:alu', 'stage:mem', 'stage:wb', 'stage:next'];
+
+export default register({
+  id: 6,
+  title: 'Branches, part 1: beq',
+  short: 'beq',
+  goal: 'Branch adder, Zero flag, PCSrc and the PC mux.',
+  level: 6,
+  scope: ['add', 'sub', 'and', 'or', 'xor', 'slt', 'sltu', 'sll', 'srl', 'sra', 'addi', 'andi', 'ori', 'xori', 'slti', 'sltiu', 'slli', 'srli', 'srai', 'lw', 'lb', 'lh', 'lbu', 'lhu', 'sw', 'sb', 'sh', 'beq'],
+  steps: [
+    {
+      title: 'Problem: the PC only counts up',
+      text: 'Loops jump backward and if-statements skip code. `beq x5, x6, +16` means: if x5 equals x6, continue 16 bytes ahead; otherwise go to the next instruction. Our PC can only become PC + 4.',
+      example: taken,
+      flow: ['stage:pc', 'stage:fetch'],
+    },
+    {
+      title: 'The B-type format',
+      text: 'Like S-type, B-type keeps {rs1} and {rs2} in place and splits the immediate. The offset is always even, so bit 0 is not stored; the freed bit holds imm[12], doubling the range to ±4 KiB.',
+      fields: ['imm'],
+      imm: 'B',
+    },
+    {
+      title: 'Rebuilding the offset',
+      text: 'imm[11] moves to bit 7, so that bits 30:25 and 11:8 carry the same immediate bits as in S-type. The sign bit is still instruction bit 31. <ctl>ImmSrc</ctl> = B selects this wiring.',
+      imm: 'B',
+      fields: ['imm'],
+      flow: ['stage:decode', 'immgen', 'c_immsrc'],
+    },
+    {
+      title: 'A second adder for the target',
+      text: 'The target is PC + offset. The ALU will be busy comparing the registers, so a separate adder computes PCTarget = PC + ImmExt. A mux in front of the PC chooses PC + 4 or PCTarget.',
+      reveal: ['target'],
+      flow: ['stage:read', 'w_pc_down', 'bradd', 'w_imm_bradd'],
+      focus: ['bradd', 'pcmux'],
+      inside: 'bradd',
+    },
+    {
+      title: 'Comparing in the ALU',
+      text: 'x5 equals x6 exactly when x5 − x6 = 0. So ALUSrc = 0 (B = rs2), the ALU subtracts, and a new output, the **Zero** flag, is 1 when the result is all zeros.',
+      reveal: ['branch'],
+      flow: ['stage:alu'],
+      focus: ['alu'],
+      inside: 'brcond',
+      predict: {
+        q: 'x5 = 7 and x6 = 7. What is the Zero flag?',
+        options: [
+          { label: 'Zero = 1', value: '1' },
+          { label: 'Zero = 0', value: '0' },
+        ],
+        answer: (t) => String(t.Zero),
+        explain: () => '7 − 7 = 0, and Zero = 1 exactly when every result bit is 0.',
+        concept: 'zero-flag',
+      },
+    },
+    {
+      title: 'PCSrc = Branch AND Zero',
+      text: '<ctl>Branch</ctl> = 1 only for branch instructions. An AND gate combines it with Zero to make <ctl>PCSrc</ctl>, the PC mux select. For every non-branch instruction Branch = 0 forces PCSrc = 0.',
+      flow: ['stage:next'],
+      predict: {
+        q: 'The instruction is at 0x00000010. Which address does the PC mux pass to the PC?',
+        options: [
+          { label: '0x00000014', value: '0x00000014' },
+          { label: '0x00000020', value: '0x00000020' },
+          { label: '0x00000024', value: '0x00000024' },
+          { label: '0x00000010', value: '0x00000010' },
+        ],
+        answer: (t) => hex(t.PCNext),
+        explain: () => 'Zero = 1 and Branch = 1, so PCSrc = 1 and the mux passes PCTarget = 0x10 + 16 = 0x20. The offset is relative to the branch itself, not to PC + 4.',
+        concept: 'branch-target',
+      },
+      inside: 'andg',
+    },
+    {
+      edge: true,
+      text: 'At the clock edge the PC becomes 0x20. RegWrite = 0 and MemWrite = 0, so nothing else changes: a branch only redirects the PC.',
+      flow: ['c_pc_clk'],
+    },
+    {
+      title: 'Not taken',
+      text: 'With x5 = 7 and x6 = 9 the difference is −2, not zero.',
+      example: notTaken,
+      flow: [...front, 'stage:alu', 'stage:next'],
+      predict: {
+        q: 'With x5 = 7 and x6 = 9, what is the next PC?',
+        options: [
+          { label: '0x00000014', value: '0x00000014' },
+          { label: '0x00000020', value: '0x00000020' },
+        ],
+        answer: (t) => hex(t.PCNext),
+        explain: () => 'Zero = 0, so PCSrc = 0 and the PC mux passes PC + 4. The branch adder still computed 0x20; its output is simply not selected.',
+        concept: 'branch-not-taken',
+      },
+    },
+    {
+      title: 'Branching backward',
+      text: '`beq x0, x0, -8` is always taken, since x0 equals x0. The offset −8 is sign-extended from bit 31, and PC + (−8) moves back two instructions: this is how a loop closes.',
+      example: back,
+      flow: cycle,
+      imm: 'B',
+    },
+    {
+      title: 'Everything else still works',
+      text: 'For add, Branch = 0, so PCSrc = 0 regardless of Zero. The branch adder computes some meaningless target every cycle; the mux ignores it.',
+      example: add,
+      flow: cycle,
+    },
+  ],
+  practice: [
+    { kind: 'encode', ops: ['beq'], title: 'Encode beq: rebuild the B-type offset' },
+    { kind: 'decode', ops: ['beq', 'sw', 'addi'], title: 'Decode branch words' },
+    { kind: 'control', ops: ['beq', 'sw', 'lw', 'add'], title: 'Set the control signals' },
+    { kind: 'trace', ops: ['beq'], title: 'Trace a branch' },
+    { kind: 'build', title: 'Build: the branch hardware' },
+    { kind: 'break', title: 'Break the circuit', faults: ['cut:zero_to_branch', 'stuck:Branch:1', 'cut:pcplus4_to_pcmux', 'stuck:ALUSrc:1'] },
+    { kind: 'quiz', title: 'beq check', concepts: ['zero-flag', 'branch-target', 'branch-not-taken', 'btype-bit0'] },
+  ],
+});

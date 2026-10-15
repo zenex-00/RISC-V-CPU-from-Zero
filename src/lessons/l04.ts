@@ -1,0 +1,154 @@
+import { register, type Example } from './types';
+import { hex } from '../sim/bits';
+
+const lw: Example = { asm: 'lw x5, 8(x6)', regs: { 6: 0x1000 }, mem: { 0x1008: 1234 } };
+const lwNeg: Example = { asm: 'lw x5, -4(x6)', regs: { 6: 0x1010 }, mem: { 0x100c: 77 } };
+const lb: Example = { asm: 'lb x5, 1(x6)', regs: { 6: 0x1000 }, mem: { 0x1000: 0x12348056 } };
+const lbu: Example = { asm: 'lbu x5, 1(x6)', regs: { 6: 0x1000 }, mem: { 0x1000: 0x12348056 } };
+const lh: Example = { asm: 'lh x5, 2(x6)', regs: { 6: 0x1000 }, mem: { 0x1000: 0xfedc8056 } };
+const add: Example = { asm: 'add x5, x6, x7', regs: { 6: 23, 7: 19 } };
+
+const front = ['stage:pc', 'stage:fetch', 'stage:decode', 'stage:read', 'stage:alu'];
+const cycle = [...front, 'stage:mem', 'stage:wb', 'stage:next'];
+
+export default register({
+  id: 4,
+  title: 'Loads',
+  short: 'Loads',
+  goal: 'Data memory, address calculation, the write-back mux and byte loads.',
+  level: 4,
+  scope: ['add', 'sub', 'and', 'or', 'xor', 'slt', 'sltu', 'sll', 'srl', 'sra', 'addi', 'andi', 'ori', 'xori', 'slti', 'sltiu', 'slli', 'srli', 'srai', 'lw', 'lb', 'lh', 'lbu', 'lhu'],
+  steps: [
+    {
+      title: 'Problem: values live in memory',
+      text: '32 registers are not enough for real data: arrays, structures and the stack live in memory. `lw x5, 8(x6)` loads the word at address x6 + 8 into x5. Our circuit has no data memory.',
+      example: lw,
+      flow: ['stage:pc', 'stage:fetch'],
+    },
+    {
+      title: 'Loads are I-type',
+      text: 'The {opcode} `0000011` means LOAD. {rs1} holds the base address and the 12-bit {imm} is a signed byte offset. {funct3} gives the size (`010` is a word) and {rd} receives the value.',
+      fields: ['opcode', 'imm', 'rs1', 'funct3'],
+    },
+    {
+      title: 'The address is an addition',
+      text: 'Address = R[rs1] + SignExt(imm), exactly what the ALU does for addi. So ImmSrc = I, ALUSrc = 1 and the ALU adds.',
+      flow: ['stage:decode', 'stage:read', 'stage:alu'],
+      predict: {
+        q: 'x6 = 0x00001000. What address does the ALU compute for `lw x5, 8(x6)`?',
+        options: [
+          { label: '0x00001000', value: '0x00001000' },
+          { label: '0x00001008', value: '0x00001008' },
+          { label: '0x00001020', value: '0x00001020' },
+          { label: '0x00000008', value: '0x00000008' },
+        ],
+        answer: (t) => hex(t.ALUResult),
+        explain: () => 'The offset is in bytes and is simply added: 0x1000 + 8 = 0x1008. No scaling by 4 happens in RISC-V.',
+        concept: 'load-address',
+      },
+    },
+    {
+      title: 'Data memory',
+      text: 'Data memory takes the address on A and returns the stored word on RD. Its read is combinational, like instruction memory. <ctl>MemRead</ctl> = 1 enables the read; in this model RD reads 0 when MemRead = 0.',
+      reveal: ['dmem'],
+      flow: ['w_alu_dmem', 'dmem', 'c_memread'],
+      focus: ['dmem'],
+      inside: 'dmem',
+      route: 'Data memory occupies addresses 0x1000 to 0x1FFF here, separate from instruction memory.',
+    },
+    {
+      title: 'Problem: two possible results',
+      text: 'WD3 is wired to ALUResult. For lw, the value to write is the memory data, not the address. Both values exist at the same time; we need to choose.',
+      focus: ['rf', 'dmem'],
+    },
+    {
+      title: 'The result mux',
+      text: 'A multiplexer in front of WD3 chooses the write-back value. Its select is <ctl>ResultSrc</ctl>: 0 passes ALUResult, 1 passes the memory data.',
+      reveal: ['resmux'],
+      focus: ['resmux'],
+      predict: {
+        q: 'Which ResultSrc does `lw` need?',
+        options: [
+          { label: 'ResultSrc = 0 (ALUResult)', value: '0' },
+          { label: 'ResultSrc = 1 (memory data)', value: '1' },
+        ],
+        answer: (t) => String(t.ctrl.ResultSrc),
+        explain: () => 'A load writes the value read from memory. ALUResult (the address 0x1008) is still on its wire; the mux simply does not pass it.',
+        concept: 'resultsrc',
+      },
+      flow: ['stage:mem', 'stage:wb'],
+    },
+    {
+      edge: true,
+      text: 'At the clock edge x5 becomes 1234. RegWrite = 1 and MemWrite = 0: a load writes a register, not memory.',
+      flow: ['c_pc_clk', 'c_rf_clk'],
+    },
+    {
+      title: 'Negative offsets',
+      text: 'The offset is sign-extended, so `lw x5, -4(x6)` reads the word just below x6. Here x6 = 0x1010, so the address is 0x100C.',
+      example: lwNeg,
+      flow: cycle,
+      imm: 'I',
+    },
+    {
+      title: 'R-type still writes ALUResult',
+      text: 'For add, ResultSrc = 0 and MemRead = 0. The data memory still sees an address (whatever the ALU computed) but its output is ignored.',
+      example: add,
+      flow: cycle,
+    },
+    {
+      title: 'Problem: bytes inside a word',
+      text: '`lb x5, 1(x6)` loads one byte, at address 0x1001. The memory is word-wide: it returns the whole aligned word 0x12348056 at 0x1000. Byte 1 of that word is 0x80 (little-endian: byte 0 is the lowest).',
+      example: lb,
+      flow: [...front, 'w_alu_dmem', 'dmem'],
+      fields: ['funct3'],
+    },
+    {
+      title: 'The load-extend unit',
+      text: 'A new block between memory and the result mux picks the byte or halfword named by address bits [1:0] and extends it to 32 bits. {funct3} says the size and whether to sign-extend.',
+      reveal: ['ldext'],
+      focus: ['ldext'],
+      inside: 'ldext',
+      predict: {
+        q: 'The selected byte is 0x80. What does `lb` write to x5?',
+        options: [
+          { label: '0x00000080 (128)', value: '0x00000080' },
+          { label: '0xFFFFFF80 (-128)', value: '0xffffff80' },
+          { label: '0x12348056', value: '0x12348056' },
+          { label: '0x80000000', value: '0x80000000' },
+        ],
+        answer: (t) => hex(t.LoadData),
+        explain: () => 'lb sign-extends: bit 7 of 0x80 is 1, so the upper 24 bits become 1 and the value is -128.',
+        concept: 'lb-sign',
+      },
+      flow: ['stage:mem', 'stage:wb'],
+    },
+    {
+      title: 'lbu zero-extends',
+      text: '`lbu` loads the same byte but fills the upper bits with zeros, giving 128. lbu and lb differ only in funct3 bit 2.',
+      example: lbu,
+      flow: cycle,
+      fields: ['funct3'],
+    },
+    {
+      title: 'Halfwords',
+      text: '`lh x5, 2(x6)` reads the upper halfword 0xFEDC of the word at 0x1000 and sign-extends it to 0xFFFFFEDC. Halfword addresses must be even: lh from an odd address is a misaligned access, which this hardware does not support.',
+      example: lh,
+      flow: cycle,
+    },
+    {
+      edge: true,
+      text: 'At the edge x5 is written. Every load uses the same path: address in the ALU, read, extract and extend, write back.',
+      flow: ['c_pc_clk', 'c_rf_clk'],
+      panel: 'load-table',
+    },
+  ],
+  practice: [
+    { kind: 'encode', ops: ['lw', 'lb', 'lh', 'lbu', 'lhu'], title: 'Encode loads' },
+    { kind: 'decode', ops: ['lw', 'lb', 'lh', 'lbu', 'lhu', 'addi'], title: 'Decode loads' },
+    { kind: 'control', ops: ['lw', 'addi', 'add'], title: 'Set the control signals' },
+    { kind: 'trace', ops: ['lw', 'lb'], title: 'Trace a load' },
+    { kind: 'build', title: 'Build: data memory and the result mux' },
+    { kind: 'quiz', title: 'Load check', concepts: ['load-address', 'resultsrc', 'lb-sign', 'misaligned'] },
+  ],
+});
